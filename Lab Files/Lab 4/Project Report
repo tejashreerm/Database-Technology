@@ -1,0 +1,715 @@
+/**** Question 2 ****/
+
+drop table if exists Ticket;
+drop table if exists Booking;
+drop table if exists Reservation;
+drop table if exists Credit_card;
+drop table if exists Contact;
+drop table if exists Passengers;
+drop table if exists Flight;
+drop table if exists Weekly_schedule;
+drop table if exists Weekday_pricing_factor;
+drop table if exists Route;
+drop table if exists Profit;
+drop table if exists Airport;
+
+
+create table Airport( 
+Airport_code varchar(3) not null, 
+Airport_name varchar(30) not null,  
+Country varchar(30) not null,
+primary key(Airport_code)
+); 
+
+
+create table Profit(
+Year int not null,
+Profit_factor double not null,
+primary key(Year)
+);
+
+
+create table Weekday_pricing_factor(
+Year int not null,
+Day varchar(10) not null,
+Pricing_factor double not null,
+primary key(Day,Year),
+foreign key(Year) references Profit(Year)
+);
+
+
+create table Route(
+Route_id int not null auto_increment,
+Departure_airport_code varchar(3),
+Arrival_airport_code varchar(3),
+Year int,
+Route_price double default 0,
+primary key(Route_id),
+foreign key(Arrival_airport_code) references Airport(Airport_code),
+foreign key(Departure_airport_code) references Airport(Airport_code),
+foreign key(Year) references Profit(Year)
+); 
+
+
+create table Weekly_schedule(
+Weekly_schedule_id int not null auto_increment,
+Route_id int,
+Day varchar(10),
+Departure_time time,
+primary key(Weekly_schedule_id),
+foreign key(Route_id) references Route(Route_id)
+);
+
+
+create table Flight(
+Flight_id int not null auto_increment,
+Weekly_flight int not null,
+Seats int default 40,
+Week_number int not null,
+primary key(Flight_id),
+foreign key(Weekly_flight) references Weekly_schedule(Weekly_schedule_id)
+);
+
+
+create table Passengers(
+Reservation_number int not null,
+Passport_number int default 0,
+Full_name varchar(30),
+primary key(Passport_number, Reservation_number)
+);
+
+
+create table Contact(
+Contact_passport_number int,
+Phone_number bigint,
+E_mail varchar(30),
+primary key(Contact_passport_number),
+foreign key(Contact_passport_number) references Passengers(Passport_number)
+);
+
+
+create table Reservation(
+Reservation_number int not null auto_increment,
+Flight_id int not null,
+Number_of_passengers int,
+Contact_Passport_number int,
+primary key(Reservation_number),
+foreign key(Flight_id) references Flight(Flight_id),
+foreign key(Contact_Passport_number) references Contact(Contact_Passport_number)
+);
+
+
+create table Credit_card(
+Card_number bigint not null,
+Credit_card_holder varchar(30),
+primary key(Card_number)
+);
+
+
+create table Booking(
+Booking_id int not null auto_increment,
+Reservation_number int not null,
+Card_number bigint not null,
+Price double default 0,
+primary key(Booking_id),
+foreign key(Reservation_number) references Reservation(Reservation_number),
+foreign key(Card_number) references Credit_card(Card_number)
+);
+
+
+create table Ticket(
+Booking_id int,
+Passport_number int,
+Ticket_number int,
+primary key(Booking_id,Passport_number),
+foreign key(Booking_id) references Booking(Booking_id),
+foreign key(Passport_number) references Passengers(Passport_number)
+);
+
+
+/**** Question 3 ****/
+
+
+drop procedure if exists addYear;
+drop procedure if exists addDay;
+drop procedure if exists addDestination;
+drop procedure if exists addRoute;
+drop procedure if exists addFlight;
+
+
+delimiter //
+create procedure addYear(in year int,in factor double)
+begin
+insert into Profit(Year,Profit_factor)
+values(year,factor);
+end; //
+delimiter ;
+
+
+delimiter //
+create procedure addDay(in year int,in day varchar(10),in factor double)
+begin
+insert into Weekday_pricing_factor(Year,Day,Pricing_factor)
+values(year,day,factor);
+end; //
+delimiter ;
+
+
+delimiter //
+create procedure addDestination(in airport_code varchar(3),in name varchar(30),in country varchar(30))
+begin
+insert into Airport(Airport_code,Airport_name,Country)
+values(airport_code,name,country);
+end; //
+delimiter ;
+
+
+delimiter //
+create procedure addRoute(in departure_airport_code varchar(3),in arrival_airport_code varchar(3),in year int,in routeprice double)
+begin
+insert into Route(Departure_airport_code,Arrival_airport_code,Year,Route_price)
+values(departure_airport_code,arrival_airport_code,year,routeprice);
+end; //
+delimiter ;
+
+
+delimiter //
+create procedure addFlight(in departure_airport_code varchar(3),in arrival_airport_code varchar(3),in year int,in day varchar(10),in departure_time time)
+begin
+
+declare Route_id_var int;
+declare Old_id int;
+declare Current_week int default 1;
+
+select Route_id into Route_id_var
+from Route
+where Route.Year=year and Route.Departure_airport_code=departure_airport_code and Route.Arrival_airport_code=arrival_airport_code;
+
+insert into Weekly_schedule(Route_id,Day,Departure_time)
+values(Route_id_var,day,departure_time);
+
+set Old_id = last_insert_id();
+
+while Current_week <= 52 do
+insert into Flight(Weekly_flight, Week_number) values (Old_id, Current_week);
+set Current_week = Current_week + 1;
+end while;  
+end //
+delimiter ;
+
+
+/**** Question 4 ****/
+
+
+drop function if exists calculateFreeSeats;
+drop function if exists calculatePrice;
+
+delimiter //
+create function calculateFreeSeats(flightnumber int)
+returns int deterministic
+begin 
+	declare passengerCount int;
+	declare freeSeats int;
+    
+    	select count(t.Passport_number) into passengerCount
+	from Reservation r, Booking b, Ticket t
+	where r.Reservation_number = b.Reservation_number and b.Booking_id = t.Booking_id and r.Flight_id = flightnumber;
+    
+    	set freeSeats = 40 -  passengerCount;
+    
+    	return freeSeats;
+end;
+//
+delimiter ;
+
+delimiter //
+create function calculatePrice(flightnumber int)
+returns double deterministic
+begin
+	declare TotalPrice double;
+	declare Routeprice double;
+	declare Weekdayfactor double;
+	declare Routeyear int;
+	declare Profitfactor double;
+	declare BookedPassengers int;
+
+	select Route_price,Year into Routeprice,Routeyear
+	from Route, Weekly_schedule, Flight 
+	where Route.Route_id=Weekly_schedule.Route_id and Weekly_schedule.Weekly_schedule_id=Flight.Weekly_flight
+	and Flight.Flight_id=flightnumber;  	
+	
+	select Pricing_factor into Weekdayfactor 
+	from Weekday_pricing_factor, Weekly_schedule, Flight
+	where Weekday_pricing_factor.Day=Weekly_schedule.Day and Weekday_pricing_factor.Year=Routeyear and Weekly_schedule.Weekly_schedule_id=Flight.Weekly_flight 
+	and Flight.Flight_id=flightnumber;
+
+	select Profit.Profit_factor into Profitfactor 
+	from Profit
+	where Profit.Year=Routeyear;
+
+	set BookedPassengers=40-calculateFreeSeats(flightnumber);
+	set TotalPrice=Routeprice*Weekdayfactor*((BookedPassengers+1)/40)*Profitfactor;
+	return TotalPrice;
+end; 
+//
+delimiter ;
+
+
+/**** Question 5 ****/
+
+
+drop trigger if exists ticketnumber;
+
+delimiter //
+create trigger ticketnumber
+before insert on Ticket
+for each row
+
+begin
+declare ticket_number int;
+set ticket_number= floor(rand()*1000000);
+
+set  new.Ticket_number = ticket_number; 
+end;
+//
+
+delimiter ;
+
+
+/**** Question 6 ****/
+
+
+drop procedure if exists addReservation;
+drop procedure if exists addPassenger;
+drop procedure if exists addContact;
+drop procedure if exists addPayment;
+
+delimiter //
+create procedure addReservation(
+	in departure_airport_code varchar(3),
+	in arrival_airport_code varchar(3),
+	in year int,
+	in week int,
+	in day varchar(10),
+	in time time,
+	in number_of_passengers int,
+	out output_reservation_nr int)
+begin
+	declare rid int; 
+	declare wsID int; 
+	declare currentFlight int;
+	declare reservationID int;   
+
+	set currentFlight = null;  
+
+	select Route.Route_id into rid 
+	from Route 
+	where Route.Departure_airport_code = departure_airport_code 
+	and Route.Arrival_airport_code = arrival_airport_code
+	and Route.Year = year;
+
+	select Weekly_schedule.Weekly_schedule_id into wsID
+	from Weekly_schedule
+	where Weekly_schedule.Route_id = rid
+	and Weekly_schedule.Day = day
+	and Weekly_schedule.Departure_time = time;
+
+	select Flight.Flight_id into currentFlight
+	from Flight
+	where Flight.Weekly_flight = wsID
+	and Flight.Week_number = week;
+	 
+	if(currentFlight is null) then
+		select 'There exist no flight for the given route, date and time' as 'message';
+	elseif(number_of_passengers > calculateFreeSeats(currentFlight)) then
+		select 'There are not enough seats available on the chosen flight' as 'message';
+	else
+		insert into Reservation(Flight_id,Number_of_passengers) 
+		values (currentFlight,number_of_passengers);
+		select max(Reservation_number) into reservationID
+		from Reservation
+		where Reservation.Flight_id = currentFlight
+		and Reservation.Number_of_passengers = number_of_passengers;
+        
+        
+	set output_reservation_nr = reservationID;
+	end if;
+end;		
+//
+delimiter ;
+	
+
+SET SQL_SAFE_UPDATES = 0;
+delimiter //
+create procedure addPassenger(
+	in reservation_nr int,
+	in passport_number int,
+	in name varchar(30))
+begin
+	declare reservationCheck int;
+	declare	passNum int;
+    	declare PaymentCheck int;
+	declare BookingIdCheck int;
+	
+	select Reservation.Reservation_number into reservationCheck
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr; 
+
+	select Booking.Booking_id into	BookingIdCheck
+	from Booking
+	where Booking.Reservation_number = reservation_nr;
+
+	select Ticket.Booking_id into PaymentCheck
+	from Ticket
+	where Ticket.Booking_id = BookingIdCheck;
+
+	if (reservationCheck is null) then
+		select 'The given reservation number does not exist' as 'message';
+	elseif (PaymentCheck is not null) then
+		select "The booking has already been payed and no futher passengers can be added" as 'message';
+	else
+		select Passport_number into passNum
+		from Passengers
+		where Passengers.Passport_number = passport_number 
+        	and Passengers.Reservation_number = reservation_nr;
+		
+		if (passNum is null) then
+			insert into Passengers(Reservation_number,Passport_number,Full_name)
+			values (reservationCheck,passport_number,name);
+		end if;
+	end if;
+end;
+//
+delimiter ;
+
+
+delimiter //
+create procedure addContact(
+	in reservation_nr int,
+	in passport_number int,
+	in email varchar(30),
+	in phone bigint)
+begin
+	declare	ResNumCheck int;
+	declare PassNumCheck int;
+
+	select Reservation.Reservation_number into ResNumCheck
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;
+
+	select Passengers.Passport_number into PassNumCheck
+	from Passengers
+	where Passengers.Reservation_number = reservation_nr
+    	and Passengers.Passport_number = passport_number;
+
+	if (ResNumCheck is null) then
+		select "The given reservation number does not exist" as message;
+	elseif (PassNumCheck is null) then
+		select "The person is not a passenger of the reservation" as message;
+	else
+		insert into Contact(Contact_Passport_number,Phone_number,E_mail)
+		values (passport_number,phone,email);
+		
+        	update Reservation
+        	set Reservation.Contact_Passport_number = passport_number
+		where Reservation.Reservation_number = reservation_nr;
+	end if;
+end;
+//
+delimiter ;
+
+
+delimiter //
+create procedure addPayment(
+	in reservation_nr int,
+	in cardholder_name varchar(30),
+	in credit_card_number bigint)
+begin
+	declare CurrResNum int;
+	declare ConPassCheck int;
+	declare CurrFlight int;
+	declare AvailSeats int;
+    	declare Passnums int;
+	declare BookingIdNew int;
+    	declare PassCount int;
+    	declare FreeSeats1 int;
+    	declare FreeSeats2 int;
+
+	select Reservation.Reservation_number into CurrResNum
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;
+
+	select Reservation.Contact_Passport_number into ConPassCheck
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;
+
+	select Reservation.Flight_id into CurrFlight
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;		
+	
+    	set FreeSeats1 = calculateFreeSeats(CurrFlight);
+    
+    	select count(Passport_number) into PassCount
+    	from Passengers
+    	where Passengers.Reservation_number = reservation_nr;
+    
+	if (CurrResNum is null) then
+		select "The given reservation number does not exist" as message;
+	elseif (ConPassCheck is null) then
+		select "The reservation has no contact yet" as message;
+ 	elseif (FreeSeats1 < PassCount) then
+		select "There are not enough seats available on the flight anymore, deleting reservation" as message;
+        	delete from Reservation
+        	where Reservation.Reservation_number = reservation_nr;
+        	delete from Contact
+        	where Contact.Contact_passport_number = ConPassCheck;
+        	delete from Passengers
+        	where Passengers.Reservation_number = reservation_nr;
+	else
+		insert into Credit_card(Card_number,Credit_card_holder) 
+		values (credit_card_number,cardholder_name);
+
+		insert into Booking(Reservation_number,Card_number,Price)
+		values (reservation_nr,credit_card_number,calculatePrice(CurrFlight));
+        
+        	insert into Ticket(Booking_id, Passport_number)
+		select b.Booking_id, p.Passport_number
+		from Booking b
+		inner join Passengers p on p.Reservation_number = b.Reservation_number
+        	where p.Reservation_number = reservation_nr;
+        
+        	set FreeSeats2 = calculateFreeSeats(CurrFlight);
+        
+        	update Flight
+		set Flight.Seats = FreeSeats2
+		where Flight.Flight_id = CurrFlight;
+	end if;	
+end;
+//
+delimiter ;
+	
+	
+/**** Question 7 ****/
+
+
+drop view if exists allFlights;
+
+create view allFlights
+as select 
+DepartAirport.Airport_name as "departure_city_name",
+ArrivalAirport.Airport_name as "destination_city_name",
+Weekly_schedule.Departure_time as "departure_time",
+Weekly_schedule.Day as "departure_day",
+Flight.Week_number as "departure_week",
+Route.Year as "departure_year",
+Flight.seats as "nr_of_free_seats",
+calculatePrice(Flight.Flight_id) as "current_price_per_seat"
+
+from Route 
+join Airport as DepartAirport on DepartAirport.Airport_code = Route.Departure_airport_code
+join Airport as ArrivalAirport on ArrivalAirport.Airport_code = Route.Arrival_airport_code
+join Weekly_schedule on Weekly_schedule.Route_id = Route.Route_id
+join Flight on Flight.Weekly_flight = Weekly_schedule.Weekly_schedule_id;
+
+
+/**** Question 8 ****/
+
+/**** 
+a)	Encrypting the Credit card information.
+Allow database  access only to authorized personnel.
+Password protecting Database.
+Using web application and database firewalls.
+
+b)	Better performance since stored procedures are compiled once and stored in executable form, so they are quick and efficient.
+Increased productivity and ease of use as it avoids redundant coding.
+Secure as you can allow access to procedures that updates a database table but deny access to a table itself. 
+****/
+
+ 
+/**** Question 9 ****/
+
+/**** 
+b)
+ No, the reservation added in session A is not visible in session B. This occurs due to the fact that the Reservation added in session A is just stored in terminal A and not added 
+to the database and committed.
+
+c) 
+Trying to update Reservation from terminal B caused the following error.
+ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+This occurs due to the fact that Reservation has a write lock on it since it is in use in session A. The lock is released only after the transaction is committed in session A. But 
+here the transaction is still in process hence results in the above mentioned error.
+MySQL supports multiple queries to be bundled up in a single transaction, which is exactly what is being done here. The transaction is session A is not finished yet by either Commit 
+or Rollback hence the following error.
+****/
+
+
+/**** Question 10 ****/
+
+/****
+a) 
+Overbookings did not occur. Since the booking process of 21 seats was started in Terminal A before Terminal B, the operations run on both the Terminals use common tables and in this particular implementation insertion of certain rows in certain tables fail due to duplication problem hence not completing the process and overbooking.  Theoretically, the condition 
+which checks the number of available (unpaid) seats in the particular flight before accepting the payment for the current booking would stop the system from overbooking. 
+
+b)
+Yes overbooking can theoretically occur if operations on both the terminals run exactly at the same time. Once the operations on both the terminals passes through the condition which 
+checks the number of available (unpaid) seats in the particular flight before accepting the payment for the current booking successfully, overbooking can occur.
+
+c)
+The statement 'SELECT sleep(5)' should be placed after checking the number of free seats available and right before adding the credit card detils. This makes the session sleep for 
+5 seconds right before adding payment details which would lead to booking and reduction in the number of available seats. If the sessions in Terminal A and B are started right after 
+the other the 5 second delay would enable session B to successfully pass the condition where the number of available seats is checked.
+The exact placement of 'SELECT sleep(5)' is shown below.
+delimiter //
+create procedure addPayment(
+	in reservation_nr int,
+	in cardholder_name varchar(30),
+	in credit_card_number bigint)
+begin
+	declare CurrResNum int;
+	declare ConPassCheck int;
+	declare CurrFlight int;
+	declare AvailSeats int;
+    	declare Passnums int;
+	declare BookingIdNew int;
+    	declare PassCount int;
+    	declare FreeSeats1 int;
+    	declare FreeSeats2 int;
+
+	select Reservation.Reservation_number into CurrResNum
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;
+
+	select Reservation.Contact_Passport_number into ConPassCheck
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;
+
+	select Reservation.Flight_id into CurrFlight
+	from Reservation
+	where Reservation.Reservation_number = reservation_nr;		
+	
+    	set FreeSeats1 = calculateFreeSeats(CurrFlight);
+    
+    	select count(Passport_number) into PassCount
+    	from Passengers
+    	where Passengers.Reservation_number = reservation_nr;
+    
+	if (CurrResNum is null) then
+		select "The given reservation number does not exist" as message;
+	elseif (ConPassCheck is null) then
+		select "The reservation has no contact yet" as message;
+ 	elseif (FreeSeats1 < PassCount) then
+		select "There are not enough seats available on the flight anymore, deleting reservation" as message;
+        	delete from Reservation
+        	where Reservation.Reservation_number = reservation_nr;
+        	delete from Contact
+        	where Contact.Contact_passport_number = ConPassCheck;
+        	delete from Passengers
+        	where Passengers.Reservation_number = reservation_nr;
+	else
+		#### SELECT sleep(5); ####
+		insert into Credit_card(Card_number,Credit_card_holder) 
+		values (credit_card_number,cardholder_name);
+
+		insert into Booking(Reservation_number,Card_number,Price)
+		values (reservation_nr,credit_card_number,calculatePrice(CurrFlight));
+        
+        	insert into Ticket(Booking_id, Passport_number)
+		select b.Booking_id, p.Passport_number
+		from Booking b
+		inner join Passengers p on p.Reservation_number = b.Reservation_number
+        	where p.Reservation_number = reservation_nr;
+        
+        	set FreeSeats2 = calculateFreeSeats(CurrFlight);
+        
+        	update Flight
+		set Flight.Seats = FreeSeats2
+		where Flight.Flight_id = CurrFlight;
+	end if;	
+end;
+//
+It is not always possible to make the theoretical case occur due to the fact that it was not possible to start or perform the same operations at the exact same time in both the 
+terminals. When the second session transaction is not started or when the second session transaction's available seats checking condition does not get completed before the 
+5 seconds elapse overbookings would not be possible.
+
+d)
+Modified Test script:
+
+/******************************************************************************************
+ Question 10, concurrency
+ This is the second of two scripts that tests that the BryanAir database can handle concurrency.
+ This script sets up a valid reservation and tries to pay for it in such a way that at most 
+ one such booking should be possible (or the plane will run out of seats). This script should 
+ be run in both terminals, in parallel. 
+**********************************************************************************************/
+SELECT "Testing script for Question 10, Adds a booking, should be run in both terminals" as "Message";
+SELECT "Adding a reservations and passengers" as "Message";
+
+SET autocommit = OFF;
+
+START TRANSACTION;
+LOCK TABLE Route READ;
+LOCK TABLE Weekly_schedule READ;
+LOCK TABLE Flight READ;
+LOCK TABLE Reservation WRITE;
+CALL addReservation("MIT","HOB",2010,1,"Monday","09:00:00",21,@a); 
+UNLOCK TABLES;
+
+LOCK TABLE Reservation READ;
+LOCK TABLE Booking READ;
+LOCK TABLE Ticket READ;
+LOCK TABLE Passengers WRITE;
+CALL addPassenger(@a,00000001,"Saruman");
+CALL addPassenger(@a,00000002,"Orch1");
+CALL addPassenger(@a,00000003,"Orch2");
+CALL addPassenger(@a,00000004,"Orch3");
+CALL addPassenger(@a,00000005,"Orch4");
+CALL addPassenger(@a,00000006,"Orch5");
+CALL addPassenger(@a,00000007,"Orch6");
+CALL addPassenger(@a,00000008,"Orch7");
+CALL addPassenger(@a,00000009,"Orch8");
+CALL addPassenger(@a,00000010,"Orch9");
+CALL addPassenger(@a,00000011,"Orch10");
+CALL addPassenger(@a,00000012,"Orch11");
+CALL addPassenger(@a,00000013,"Orch12");
+CALL addPassenger(@a,00000014,"Orch13");
+CALL addPassenger(@a,00000015,"Orch14");
+CALL addPassenger(@a,00000016,"Orch15");
+CALL addPassenger(@a,00000017,"Orch16");
+CALL addPassenger(@a,00000018,"Orch17");
+CALL addPassenger(@a,00000019,"Orch18");
+CALL addPassenger(@a,00000020,"Orch19");
+CALL addPassenger(@a,00000021,"Orch20");
+UNLOCK TABLES;
+
+LOCK TABLE Passengers READ;
+LOCK TABLE Reservation WRITE;
+LOCK TABLE Contact WRITE;
+CALL addContact(@a,00000001,"saruman@magic.mail",080667989); 
+SELECT SLEEP(5);
+UNLOCK TABLES;
+
+SELECT "Making payment, supposed to work for one session and be denied for the other" as "Message";
+
+LOCK TABLE Reservation WRITE;
+LOCK TABLE Contact WRITE;
+LOCK TABLE Passengers WRITE;
+LOCK TABLE Credit_card WRITE;
+LOCK TABLE Booking WRITE;
+LOCK TABLE Ticket WRITE;
+LOCK TABLE Flight WRITE;
+CALL addPayment (@a, "Sauron",7878787878);
+COMMIT;
+UNLOCK TABLES;
+
+SELECT "Nr of free seats on the flight (should be 19 if no overbooking occured, otherwise -2): " as "Message", (SELECT nr_of_free_seats from allFlights where departure_week = 1) as "nr_of_free_seats";
+
+In the modified test script above, the autocommit is turned off, START TRANSACTION and COMMIT is used at the beggining and at the end of the transaction respectively so that no permanent changes are done to the database untill the whole transaction is executed completely. All the tables involved are locked either using a read lock or a write lock so that the transaction from any other session would not be able to access the tables or make changes to the tables before the first session's transaction is executed completely. 
+****/
+
+
+/**** Secondary Index ****/
+
+/****
+Secondary indexing can be done on a non-key which is unordered. Ticket_number attribute of Ticket table fits this criteria, so Secondary index can be used on this to access the 
+particular tuple in the Ticket table which has the particular value of interest as an entry in Ticket_number attribute. 
+****/
